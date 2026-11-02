@@ -1,0 +1,61 @@
+name: Build Android APK
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [armeabi-v7a, arm64-v8a]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set architecture
+        run: |
+          sed -i "s/^android.archs.*/android.archs = ${{ matrix.arch }}/" buildozer.spec
+          grep archs buildozer.spec
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          pip install --upgrade buildozer "cython==3.0.11" virtualenv
+
+      - name: Build APK
+        shell: bash
+        run: |
+          buildozer -v android debug 2>&1 | tee build.log
+
+      - name: Show the error
+        if: failure()
+        run: |
+          sed 's/\x1b\[[0-9;]*m//g' build.log | cut -c1-300 > clean.log
+          echo "=== ERROR LINES ==="
+          grep -n -i -E "error|exception|failed" clean.log | grep -v -i -E "warning|performance hint|noexcept|DEBUG" | tail -n 30
+          echo "=== LINES BEFORE FAILURE ==="
+          n=$(grep -n "Command failed" clean.log | head -1 | cut -d: -f1)
+          if [ -z "$n" ]; then
+            tail -n 60 clean.log
+          else
+            start=$((n-40)); if [ "$start" -lt 1 ]; then start=1; fi
+            sed -n "${start},${n}p" clean.log
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.arch }}
+          path: bin/*.apk
